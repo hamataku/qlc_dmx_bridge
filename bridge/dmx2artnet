@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""dmx2artnet - FTDI (Open DMX 系) で受けた DMX512 を Art-Net に変換して QLC+ へ渡すブリッジ
+
+- /dev/serial/by-id/<デバイス> を 250000 baud 8N2 で開き、BREAK 同期でフレームを復元する
+- 各フレームを ArtDMX パケットとして送る (既定: 127.0.0.1:6454, Art-Net universe 0 = QLC+ の Universe 1)
+- デバイスが無い / 抜かれた場合は 1 秒おきに再接続を待つ (常駐前提)
+
+使い方: dmx2artnet [--dev PATH] [--host 127.0.0.1] [--port 6454] [--universe 0] [-v]
+"""
+import os, sys, time, struct, fcntl, termios, select, socket, signal, argparse, errno
+
+DEFAULT_DEV = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG01OIGN-if00-port0"
+TCGETS2, TCSETS2, BOTHER, CBAUD = 0x802C542A, 0x402C542B, 0o10000, 0o10017
+TERMIOS2 = "IIIIB19sII"
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--dev", default=DEFAULT_DEV)
+ap.add_argument("--host", default="127.0.0.1")
+ap.add_argument("--port", type=int, default=6454)
+ap.add_argument("--universe", type=int, default=0, help="Art-Net universe (15bit: net/subnet/universe)")
+ap.add_argument("--keepalive", type=float, default=1.0, help="変化が無くても送る間隔 [秒]")
+ap.add_argument("--deadzone", default="", help="例 4:10,6:10 → ch4,ch6 は 10 以下を 0、11..255 を 1..255 に引き伸ばす")
+ap.add_argument("--gate", default="", help="例 4:10:104,6:10:106 → ch4 が 10 以下なら ch104=0、超えたら ch104=255")
+ap.add_argument("--quantize", default="", help="例 5:0,10,31,255 → ch5 を 0-255 で等分し、各ゾーンを列挙した値に置き換える")
+ap.add_argument("--map", default="", help="例 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255 (固定値) や 7:0-10=0/11-255=180-245 (線形補間)")
+ap.add_argument("-v", "--verbose", action="store_true")
+args = ap.parse_args()
+
+DEAD = {}
+for item in [x for x in args.deadzone.split(",") if x.strip()]:
+    ch, th = item.split(":"); DEAD[int(ch) - 1] = int(th)
+
+GATE = {}
+for item in [x for x in args.gate.split(",") if x.strip()]:
+    ch, th, out = item.split(":"); GATE[int(ch) - 1] = (int(th), int(out) - 1)
+QUANT = {}
+for item in [x for x in args.quantize.split(",") if x.strip()]:
+    ch, vals = item.split(":", 1); QUANT[int(ch) - 1] = [int(v) for v in vals.split("/")]
+
+MAP = {}
+for item in [x for x in args.map.split(",") if x.strip()]:
+    ch, spec = item.split(":", 1); table = list(range(256))
+    for part in spec.split("/"):
+        rng, val = part.split("="); lo, hi = int(rng.split("-")[0]), int(rng.split("-")[1])
+        if "-" in val:   # 線形補間: lo->a, hi->b
+            a, b = int(val.split("-")[0]), int(val.split("-")[1])
+            for v in range(lo, hi + 1): table[v] = round(a + (b - a) * (v - lo) / max(1, hi - lo))
+        else:
+            for v in range(lo, hi + 1): table[v] = int(val)
+    MAP[int(ch) - 1] = table
+
+def apply_deadzone(ch):
+    if not (DEAD or GATE or QUANT or MAP): return ch
+    b = bytearray(ch)
+    for idx, (th, out) in GATE.items():          # raw 値で判定してから他の変換をかける
+        if idx < len(b) and out < len(b):
+            b[out] = 0 if b[idx] <= th else 255
+    for idx, th in DEAD.items():
+        if idx < len(b):
+            v = b[idx]
+            b[idx] = 0 if v <= th else max(1, round((v - th) * 255 / (255 - th)))
+    for idx, vals in QUANT.items():
+        if idx < len(b):
+            zone = min(len(vals) - 1, b[idx] * len(vals) // 256)
+            b[idx] = vals[zone]
+    for idx, table in MAP.items():
+        if idx < len(b):
+            b[idx] = table[b[idx]]
+    return bytes(b)
+
+running = True
+def _stop(*_):
+    global running
+    running = False
+signal.signal(signal.SIGTERM, _stop)
+signal.signal(signal.SIGINT, _stop)
+
+def log(*a):
+    print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+def open_dmx(path):
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        buf = bytearray(struct.calcsize(TERMIOS2))
+        fcntl.ioctl(fd, TCGETS2, buf)
+        _, _, cflag, _, line, cc, _, _ = struct.unpack(TERMIOS2, buf)
+        cflag &= ~(termios.CSIZE | termios.PARENB | CBAUD | termios.CRTSCTS)
+        cflag |= termios.CS8 | termios.CSTOPB | termios.CREAD | termios.CLOCAL | BOTHER
+        cc = bytearray(cc); cc[termios.VMIN] = 0; cc[termios.VTIME] = 0
+        # PARMRK: BREAK -> ff 00 00, framing error -> ff 00 xx, literal 0xff -> ff ff
+        fcntl.ioctl(fd, TCSETS2, struct.pack(TERMIOS2, termios.PARMRK, 0, cflag, 0, line, bytes(cc), 250000, 250000))
+        termios.tcflush(fd, termios.TCIOFLUSH)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+seq = 0
+def send_artnet(channels):
+    global seq
+    seq = seq % 255 + 1
+    data = bytes(channels[:512]).ljust(512, b"\x00")
+    pkt = b"Art-Net\x00" + struct.pack("<H", 0x5000) + struct.pack(">H", 14) \
+        + bytes([seq, 0, args.universe & 0xFF, (args.universe >> 8) & 0x7F]) + struct.pack(">H", len(data)) + data
+    sock.sendto(pkt, (args.host, args.port))
+
+log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} deadzone={DEAD} gate={GATE} quantize={QUANT} map={{k+1: 'set' for k in MAP}}")
+last_sent = None; last_sent_t = 0.0; frames = 0
+while running:
+    if not os.path.exists(args.dev):
+        time.sleep(1.0)
+        continue
+    try:
+        fd = open_dmx(args.dev)
+    except OSError as e:
+        log(f"open failed ({e}); retrying"); time.sleep(1.0); continue
+    log("device opened, waiting for DMX")
+    state = 0; cur = None; frames = 0; last_report = time.time(); receiving = False; lens = []
+    try:
+        while running:
+            r, _, _ = select.select([fd], [], [], 0.5)
+            now = time.time()
+            if r:
+                data = os.read(fd, 4096)
+                if not data:
+                    raise OSError(errno.EIO, "EOF from device")
+                for b in data:
+                    if state == 0:
+                        if b == 0xFF: state = 1
+                        elif cur is not None: cur.append(b)
+                    elif state == 1:
+                        if b == 0xFF:
+                            if cur is not None: cur.append(0xFF)
+                            state = 0
+                        elif b == 0x00: state = 2
+                        else:
+                            if cur is not None: cur.append(b)
+                            state = 0
+                    else:  # state 2: ff 00 xx
+                        if b == 0x00:  # BREAK -> frame boundary
+                            if cur is not None and len(cur) >= 2 and cur[0] == 0x00:
+                                frames += 1
+                                # フレーム長の多数決: 欠落/連結で長さが狂ったフレームは捨てる
+                                lens.append(len(cur)); del lens[:-50]
+                                expected = max(set(lens), key=lens.count) if len(lens) >= 10 else len(cur)
+                                if len(cur) != expected:
+                                    cur = bytearray(); state = 0; continue
+                                ch = apply_deadzone(bytes(cur[1:513]).ljust(512, b"\x00"))
+                                if ch != last_sent or now - last_sent_t >= args.keepalive:
+                                    send_artnet(ch); last_sent = ch; last_sent_t = now
+                                if not receiving:
+                                    receiving = True; log(f"receiving DMX: {len(cur) - 1} channels/frame")
+                            cur = bytearray()
+                        # else: framing error byte -> dropped
+                        state = 0
+            elif receiving and now - last_sent_t > 2.0:
+                receiving = False; log("DMX signal lost (no frames for 2s)")
+            if args.verbose and now - last_report >= 5.0:
+                nz = [(i + 1, v) for i, v in enumerate(last_sent or b"") if v][:10]
+                log(f"frames={frames} nonzero={nz}"); last_report = now
+    except OSError as e:
+        log(f"device error ({e}); will reconnect")
+    finally:
+        try: os.close(fd)
+        except OSError: pass
+    last_sent = None
+    time.sleep(1.0)
+log("dmx2artnet stopped")
