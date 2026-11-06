@@ -528,7 +528,7 @@
    <ShowEnableButton>True</ShowEnableButton>
    <Collapsed>False</Collapsed>
    <Frame Caption="DMX卓 1-7" ID="34">
-    <WindowState Visible="True" X="20" Y="20" Width="800" Height="236"/>
+    <WindowState Visible="True" X="20" Y="20" Width="900" Height="236"/>
     <AllowResize>True</AllowResize>
     <ShowHeader>True</ShowHeader>
     <ShowEnableButton>True</ShowEnableButton>
@@ -609,6 +609,17 @@
      <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
      <Level LowLimit="0" HighLimit="255" Value="0">
       <Channel Fixture="4">7</Channel>
+     </Level>
+    </Slider>
+    <Slider Caption="8 Stinger Show" ID="48" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="790" Y="30" Width="85" Height="190"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Input ID="0" Universe="0" Channel="7"/>
+     <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0">
+      <Channel Fixture="0">0</Channel>
      </Level>
     </Slider>
    </Frame>
