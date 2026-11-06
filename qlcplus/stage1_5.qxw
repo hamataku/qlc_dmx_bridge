@@ -475,23 +475,23 @@
   </Function>
   <Function ID="37" Type="Scene" Name="P Green">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
-   <FixtureVal ID="3">0,255,2,0,3,255,4,0,5,0,6,0,7,0,8,0</FixtureVal>
+   <FixtureVal ID="3">2,0,3,255,4,0,5,0,6,0,7,0,8,0</FixtureVal>
   </Function>
   <Function ID="38" Type="Scene" Name="P Cyan">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
-   <FixtureVal ID="3">0,255,2,0,3,255,4,255,5,0,6,0,7,0,8,0</FixtureVal>
+   <FixtureVal ID="3">2,0,3,255,4,255,5,0,6,0,7,0,8,0</FixtureVal>
   </Function>
   <Function ID="39" Type="Scene" Name="P White">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
-   <FixtureVal ID="3">0,255,2,255,3,255,4,255,5,255,6,0,7,0,8,0</FixtureVal>
+   <FixtureVal ID="3">2,255,3,255,4,255,5,255,6,0,7,0,8,0</FixtureVal>
   </Function>
   <Function ID="40" Type="Scene" Name="P Orange">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
-   <FixtureVal ID="3">0,255,2,255,3,80,4,0,5,0,6,0,7,255,8,0</FixtureVal>
+   <FixtureVal ID="3">2,255,3,80,4,0,5,0,6,0,7,255,8,0</FixtureVal>
   </Function>
   <Function ID="41" Type="Scene" Name="P Magenta">
    <Speed FadeIn="0" FadeOut="0" Duration="0"/>
-   <FixtureVal ID="3">0,255,2,255,3,0,4,255,5,0,6,0,7,0,8,0</FixtureVal>
+   <FixtureVal ID="3">2,255,3,0,4,255,5,0,6,0,7,0,8,0</FixtureVal>
   </Function>
   <Function ID="42" Type="Chaser" Name="PAR Random">
    <Speed FadeIn="0" FadeOut="0" Duration="500"/>
@@ -536,6 +536,38 @@
     <StartOffset>0</StartOffset>
    </Fixture>
   </Function>
+  <Function ID="44" Type="Scene" Name="Strobe PAR ON">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="3">0,255</FixtureVal>
+  </Function>
+  <Function ID="45" Type="Scene" Name="Strobe PAR OFF">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="3">0,0</FixtureVal>
+  </Function>
+  <Function ID="46" Type="Scene" Name="Strobe MH ON">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="4">7,255</FixtureVal>
+  </Function>
+  <Function ID="47" Type="Scene" Name="Strobe MH OFF">
+   <Speed FadeIn="0" FadeOut="0" Duration="0"/>
+   <FixtureVal ID="4">7,0</FixtureVal>
+  </Function>
+  <Function ID="48" Type="Chaser" Name="Strobe PAR (fader 7)">
+   <Speed FadeIn="0" FadeOut="0" Duration="100"/>
+   <Direction>Forward</Direction>
+   <RunOrder>Loop</RunOrder>
+   <SpeedModes FadeIn="Common" FadeOut="Common" Duration="Common"/>
+   <Step Number="0" FadeIn="0" Hold="100" FadeOut="0">44</Step>
+   <Step Number="1" FadeIn="0" Hold="100" FadeOut="0">45</Step>
+  </Function>
+  <Function ID="49" Type="Chaser" Name="Strobe MH (fader 7)">
+   <Speed FadeIn="0" FadeOut="0" Duration="100"/>
+   <Direction>Forward</Direction>
+   <RunOrder>Loop</RunOrder>
+   <SpeedModes FadeIn="Common" FadeOut="Common" Duration="Common"/>
+   <Step Number="0" FadeIn="0" Hold="100" FadeOut="0">46</Step>
+   <Step Number="1" FadeIn="0" Hold="100" FadeOut="0">47</Step>
+  </Function>
   <Monitor DisplayMode="0" ShowLabels="0">
    <Font>MS UI Gothic,11.25,-1,5,50,0,0,0,0,0</Font>
    <ChannelStyle>0</ChannelStyle>
@@ -562,7 +594,7 @@
    <ShowEnableButton>True</ShowEnableButton>
    <Collapsed>False</Collapsed>
    <Frame Caption="DMX卓 1-7" ID="34">
-    <WindowState Visible="True" X="20" Y="20" Width="1200" Height="236"/>
+    <WindowState Visible="True" X="20" Y="20" Width="1400" Height="236"/>
     <AllowResize>True</AllowResize>
     <ShowHeader>True</ShowHeader>
     <ShowEnableButton>True</ShowEnableButton>
@@ -656,31 +688,52 @@
      </AbsoluteValue>
      <Function FadeIn="0" FadeOut="0" Duration="6">43</Function>
     </SpeedDial>
-    <Slider Caption="7 Strobe" ID="43" WidgetStyle="Slider" InvertedAppearance="false">
+    <Slider Caption="7 Strobe PAR" ID="43" WidgetStyle="Slider" InvertedAppearance="false">
      <WindowState Visible="True" X="870" Y="30" Width="85" Height="190"/>
      <Appearance>
       <BackgroundColor>4282664004</BackgroundColor>
      </Appearance>
-     <Input ID="0" Universe="0" Channel="6"/>
-     <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
-     <Level LowLimit="0" HighLimit="255" Value="0">
-      <Channel Fixture="3">1</Channel>
-      <Channel Fixture="4">6</Channel>
-      <Channel Fixture="0">2</Channel>
-     </Level>
+     <Input ID="0" Universe="0" Channel="107"/>
+     <SliderMode ValueDisplayStyle="Percentage">Adjust</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0"/>
+     <Adjust Attribute="0" Function="48"/>
     </Slider>
-    <Slider Caption="PAR Dimmer" ID="44" WidgetStyle="Slider" InvertedAppearance="false">
-     <WindowState Visible="True" X="1000" Y="30" Width="85" Height="190"/>
+    <Slider Caption="7 Strobe MH" ID="46" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="960" Y="30" Width="85" Height="190"/>
      <Appearance>
       <BackgroundColor>4282664004</BackgroundColor>
      </Appearance>
+     <Input ID="0" Universe="0" Channel="108"/>
+     <SliderMode ValueDisplayStyle="Percentage">Adjust</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0"/>
+     <Adjust Attribute="0" Function="49"/>
+    </Slider>
+    <SpeedDial Caption="7 Strobe speed" ID="47">
+     <WindowState Visible="True" X="1050" Y="30" Width="120" Height="120"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Visibility>98</Visibility>
+     <Time>500</Time>
+     <AbsoluteValue Minimum="500" Maximum="50">
+      <Input ID="0" Universe="0" Channel="6"/>
+     </AbsoluteValue>
+     <Function FadeIn="0" FadeOut="0" Duration="6">48</Function>
+     <Function FadeIn="0" FadeOut="0" Duration="6">49</Function>
+    </SpeedDial>
+    <Slider Caption="PAR Dimmer (fader 7)" ID="44" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="1190" Y="30" Width="85" Height="190"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Input ID="0" Universe="0" Channel="109"/>
      <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
-     <Level LowLimit="0" HighLimit="255" Value="255">
+     <Level LowLimit="0" HighLimit="255" Value="0">
       <Channel Fixture="3">0</Channel>
      </Level>
     </Slider>
-    <Slider Caption="MH Dimmer (fader 5)" ID="45" WidgetStyle="Slider" InvertedAppearance="false">
-     <WindowState Visible="True" X="1100" Y="30" Width="85" Height="190"/>
+    <Slider Caption="MH Dimmer (fader 5/7)" ID="45" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="1290" Y="30" Width="85" Height="190"/>
      <Appearance>
       <BackgroundColor>4282664004</BackgroundColor>
      </Appearance>

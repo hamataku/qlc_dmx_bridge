@@ -4,7 +4,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/dmx2artnet --deadzone 4:10,6:10 --gate 4:10:104,6:10:106,5:10:107 --map 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255,7:0-10=0/11-255=180-245
+ExecStart=%h/.local/bin/dmx2artnet --deadzone 4:10,6:10,7:10 --gate 4:10:104,6:10:106 --map 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255 --logic "107=ch5>10&ch7<=10,108=ch7>10,109=ch7>10&ch5>10,110=ch7<=10"
 Restart=always
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1

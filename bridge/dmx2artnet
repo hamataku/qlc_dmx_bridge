@@ -23,6 +23,7 @@ ap.add_argument("--deadzone", default="", help="例 4:10,6:10 → ch4,ch6 は 10
 ap.add_argument("--gate", default="", help="例 4:10:104,6:10:106 → ch4 が 10 以下なら ch104=0、超えたら ch104=255")
 ap.add_argument("--quantize", default="", help="例 5:0,10,31,255 → ch5 を 0-255 で等分し、各ゾーンを列挙した値に置き換える")
 ap.add_argument("--map", default="", help="例 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255 (固定値) や 7:0-10=0/11-255=180-245 (線形補間)")
+ap.add_argument("--logic", default="", help="例 108=ch7>10,109=ch7>10&ch5>10 → 条件が真なら 255、偽なら 0 を OUT チャンネルへ (& | ! が使える、生の値で判定)")
 ap.add_argument("-v", "--verbose", action="store_true")
 args = ap.parse_args()
 
@@ -49,9 +50,20 @@ for item in [x for x in args.map.split(",") if x.strip()]:
             for v in range(lo, hi + 1): table[v] = int(val)
     MAP[int(ch) - 1] = table
 
+LOGIC = []
+for item in [x for x in args.logic.split(",") if x.strip()]:
+    out, expr = item.split("=", 1)
+    expr = expr.replace("&", " and ").replace("|", " or ").replace("!", " not ")
+    LOGIC.append((int(out) - 1, compile(expr, "<logic>", "eval")))
+
 def apply_deadzone(ch):
-    if not (DEAD or GATE or QUANT or MAP): return ch
+    if not (DEAD or GATE or QUANT or MAP or LOGIC): return ch
     b = bytearray(ch)
+    if LOGIC:
+        env = {f"ch{i + 1}": b[i] for i in range(len(b))}
+        for out, code in LOGIC:
+            if out < len(b):
+                b[out] = 255 if eval(code, {"__builtins__": {}}, env) else 0
     for idx, (th, out) in GATE.items():          # raw 値で判定してから他の変換をかける
         if idx < len(b) and out < len(b):
             b[out] = 0 if b[idx] <= th else 255
@@ -105,7 +117,7 @@ def send_artnet(channels):
         + bytes([seq, 0, args.universe & 0xFF, (args.universe >> 8) & 0x7F]) + struct.pack(">H", len(data)) + data
     sock.sendto(pkt, (args.host, args.port))
 
-log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} deadzone={DEAD} gate={GATE} quantize={QUANT} map={{k+1: 'set' for k in MAP}}")
+log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} deadzone={DEAD} gate={GATE} quantize={QUANT} map={{k+1: 'set' for k in MAP}} logic={[o+1 for o,_ in LOGIC]}")
 last_sent = None; last_sent_t = 0.0; frames = 0
 while running:
     if not os.path.exists(args.dev):
