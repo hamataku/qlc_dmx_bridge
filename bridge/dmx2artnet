@@ -12,8 +12,10 @@
   --map      CH:lo-hi=v/.. 範囲ごとに固定値 v または a-b で線形補間   例 5:0-10=0/11-88=0/89-166=10
   --random   CH:TH:T1-T2:O1/O2/O3   CH が TH 超のとき O1..O3 (RGB) にランダム色。切替周期は TH+1→T1 ms, 255→T2 ms
   --strobe   CH:TH:T1-T2:O1/O2/..   CH が TH 超のとき O1.. を周期的に 0 にする。半周期は TH+1→T1 ms, 255→T2 ms
+  --colormod CH:TH:T1-T2:O1/O2/O3   CH が TH 超のとき O1..O3 (RGB) の色を HSV で揺らす。明度は固定、
+                                   色相の振れ幅 (最大 ±180°) と彩度の注入量と速度が CH に比例。周期は TH+1→T1 ms, 255→T2 ms
 """
-import os, sys, time, struct, fcntl, termios, select, socket, signal, argparse, errno, random
+import os, sys, time, struct, fcntl, termios, select, socket, signal, argparse, errno, random, math, colorsys
 
 DEFAULT_DEV = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG01OIGN-if00-port0"
 TCGETS2, TCSETS2, BOTHER, CBAUD = 0x802C542A, 0x402C542B, 0o10000, 0o10017
@@ -33,6 +35,7 @@ ap.add_argument("--map", default="")
 ap.add_argument("--logic", default="")
 ap.add_argument("--random", default="")
 ap.add_argument("--strobe", default="")
+ap.add_argument("--colormod", default="")
 ap.add_argument("-v", "--verbose", action="store_true")
 args = ap.parse_args()
 
@@ -74,6 +77,32 @@ for item in split_items(args.strobe):
     ch, th, rng, outs = item.split(":"); t1, t2 = rng.split("-")
     STROBE.append([int(ch) - 1, int(th), float(t1), float(t2), [int(o) - 1 for o in outs.split("/")]])
 
+COLORMOD = []   # [ch, th, t1, t2, [outs], state]
+for item in split_items(args.colormod):
+    ch, th, rng, outs = item.split(":"); t1, t2 = rng.split("-")
+    COLORMOD.append([int(ch) - 1, int(th), float(t1), float(t2), [int(o) - 1 for o in outs.split("/")],
+                     {"t": None, "p1": 0.0, "p2": 0.0, "p3": 0.0, "hbase": 0.0}])
+
+def colormod(rgb, a, st, now, period_s):
+    """rgb: 0-255 の基準色, a: 0..1 の効果量, period_s: 揺れの基本周期 [秒]"""
+    dt = 0.0 if st["t"] is None else max(0.0, min(0.2, now - st["t"]))
+    st["t"] = now
+    w = 2 * math.pi / max(0.05, period_s)
+    st["p1"] += w * dt; st["p2"] += w * 1.618 * dt; st["p3"] += w * 0.5 * dt
+    st["hbase"] = (st["hbase"] + 0.02 * dt) % 1.0          # 白/灰のとき使う基準色相 (50 秒で一周)
+    r, g, b = (c / 255.0 for c in rgb)
+    h, sat, v = colorsys.rgb_to_hsv(r, g, b)
+    if v <= 0.0:
+        return rgb
+    if sat < 0.1:                                             # ほぼ白: 色相が無いので回転する基準色相に乗せる
+        h = st["hbase"]
+    drift = 0.7 * math.sin(st["p1"]) + 0.3 * math.sin(st["p2"] + 1.0)   # -1..1 の準周期的な揺れ
+    h2 = (h + 0.5 * a * drift) % 1.0                                     # 最大 ±180 度
+    inject = a * (0.5 + 0.5 * math.sin(st["p3"]))                        # 彩度の注入 (白をパステル→鮮やかへ)
+    s2 = min(1.0, sat + (1.0 - sat) * inject)
+    r2, g2, b2 = colorsys.hsv_to_rgb(h2, s2, v)
+    return (round(r2 * 255), round(g2 * 255), round(b2 * 255))
+
 def transform(raw, now):
     b = bytearray(raw)
     if LOGIC:
@@ -95,6 +124,13 @@ def transform(raw, now):
             for o, v in zip(outs, st["color"]): b[o] = v
         else:
             st["next"] = 0.0
+    for ch, th, t1, t2, outs, st in COLORMOD:
+        if raw[ch] > th:
+            a = (raw[ch] - th) / (255 - th)
+            base = tuple(b[o] for o in outs)
+            for o, v in zip(outs, colormod(base, a, st, now, lin(raw[ch], th, t1, t2) / 1000.0)): b[o] = v
+        else:
+            st["t"] = None
     for ch, th, t1, t2, outs in STROBE:
         if raw[ch] > th:
             half = lin(raw[ch], th, t1, t2) / 1000.0
@@ -141,7 +177,7 @@ def send_artnet(channels):
 
 log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} "
     f"deadzone={ {k+1: v for k, v in DEAD.items()} } gate={ {k+1: (t, o+1) for k, (t, o) in GATE.items()} } "
-    f"map={[k+1 for k in MAP]} logic={[o+1 for o, _ in LOGIC]} random={[r[0]+1 for r in RANDOM]} strobe={[s[0]+1 for s in STROBE]}")
+    f"map={[k+1 for k in MAP]} logic={[o+1 for o, _ in LOGIC]} random={[r[0]+1 for r in RANDOM]} strobe={[s[0]+1 for s in STROBE]} colormod={[c[0]+1 for c in COLORMOD]}")
 raw = bytes(512)
 last_sent = None; last_sent_t = 0.0
 while running:
