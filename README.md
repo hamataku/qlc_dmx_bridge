@@ -15,7 +15,7 @@ DMX 卓 (192ch, 約48fps)
 Open DMX USB 互換機 #1  (FTDI S/N BG01OIGN, 受信専用)
    │ /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG01OIGN-if00-port0  (ftdi_sio, 250kbaud 8N2)
    ▼
-dmx2artnet  (systemd ユーザーサービス, BREAK 同期でフレーム復元 + チャンネル変換)
+dmx2artnet  (systemd ユーザーサービス, BREAK 同期でフレーム復元 + 50Hz でチャンネル変換・ランダム色・ストロボ生成)
    │ Art-Net (ArtDMX) → 127.0.0.1:6454, universe 0
    ▼
 QLC+ 5  (Universe 1: Input = ArtNet 127.0.0.1, Output = DMX USB)
@@ -24,7 +24,7 @@ QLC+ 5  (Universe 1: Input = ArtNet 127.0.0.1, Output = DMX USB)
 Open DMX USB 互換機 #2  (FTDI S/N AH02A40C, 送信)
    │ XLR
    ▼
-HPAR64-9 (13ch, addr 1) → ムービングヘッド ×4 (全台 addr 14) → Stinger II (addr 25)
+HPAR64-9 (7ch, addr 1) → ムービングヘッド ×4 (全台 addr 8) → Stinger II (addr 19)
 ```
 
 ### なぜ QLC+ の「Open RX」を使わないのか
@@ -34,6 +34,15 @@ DMX の BREAK を検出せず「USB の 1 回の read = 1 フレーム」とみ�
 この卓（194 バイト/フレーム、62 バイト単位の USB パケット）ではチャンネル番号が毎回ずれます。
 そこで ftdi_sio 経由で tty を開き、`PARMRK` で BREAK を検出して確実にフレーム同期を取る
 ブリッジを用意し、Art-Net で QLC+ に渡しています。チャンネル番号は卓と 1:1 で一致します。
+
+### なぜランダム色とストロボをブリッジ側で作るのか
+
+QLC+ では RGB や Dimmer などの強度系チャンネルが HTP（大きい方優先）で合成されるため、
+フェーダーで色を上げたまま QLC+ の Function で「暗くする」ことができません。
+PAR を 7ch モード（Dimmer なし）で使う以上、点滅やランダム色を QLC+ 側で作ると HTP に阻まれます。
+そこでブリッジが 50 Hz のタイマーでランダム色・ストロボを計算し、最終的な RGB 値を QLC+ に渡します。
+QLC+ の Virtual Console は「入力をそのまま灯体チャンネルに流す Level スライダー」と
+ムービングヘッドの EFX だけで済み、PAR と MH のストロボも同じタイマーなので完全に同期します。
 
 ## ファイル構成
 
@@ -95,9 +104,9 @@ ON にすると QLC+ が libftdi で受信側 FTDI を掴み、ブリッジか�
 
 | 灯体 | モード | DMX アドレス |
 |---|---|---|
-| STAGE EVO HPAR64-9 | 13ch | 1〜13 |
-| UKing LED Spot Moving Head 100W ×4 | 11ch | 全台 14（QLC+ 上は 1 台として扱う） |
-| American DJ Stinger II | 9ch | 25〜33 |
+| STAGE EVO HPAR64-9 | 7ch | 1〜7 |
+| UKing LED Spot Moving Head 100W ×4 | 11ch | 全台 8（QLC+ 上は 1 台として扱う） |
+| American DJ Stinger II | 9ch | 19〜27 |
 
 QLC+ はアドレスが重なるフィクスチャを読み込み時に拒否するため、
 同じアドレスの 4 台はワークスペース上 1 台に統合しています。
@@ -108,33 +117,36 @@ QLC+ はアドレスが重なるフィクスチャを読み込み時に拒否す
 
 | フェーダー | 動作 | ブリッジでの変換 | QLC+ 側ウィジェット |
 |---|---|---|---|
-| 1 | PAR 赤 | なし | Level スライダー → HPAR Red |
-| 2 | PAR 緑 | なし | Level スライダー → HPAR Green |
-| 3 | PAR 青 | なし | Level スライダー → HPAR Blue |
-| 4 | PAR ランダム色 | 10 以下 = 停止、11〜255 を ch4 (速度) と ch104 (ON/OFF) に分離 | Adjust スライダー → Chaser「PAR Random」、Speed Dial 2 秒〜0.08 秒 |
-| 5 | ムービングヘッドの色 | 0〜10 消灯 / 11〜88 白 / 89〜166 赤 / 167〜244 青 / 245〜255 自動色替え。ch107 = Brightness 保持（5 が 10 超かつ 7 が 10 以下のとき 255） | Level スライダー → Color Select、Level スライダー → Brightness |
+| 1 | PAR 赤 | そのまま（ランダム・ストロボ中はブリッジが上書き） | Level スライダー → HPAR Red |
+| 2 | PAR 緑 | 同上 | Level スライダー → HPAR Green |
+| 3 | PAR 青 | 同上 | Level スライダー → HPAR Blue |
+| 4 | PAR ランダム色 | 10 以下 = なし（1〜3 の色）。11〜255 で ch1〜3 に 8 色パレットのランダム色を書き、切替周期 2 秒 → 0.08 秒 | なし（1〜3 のスライダーに乗る） |
+| 5 | ムービングヘッドの色 | 0〜10 消灯 / 11〜88 白 / 89〜166 赤 / 167〜244 青 / 245〜255 自動色替え。ch107 = Brightness（5 が 10 超なら 255） | Level スライダー → Color Select、Level スライダー → Brightness |
 | 6 | ムービングヘッドの動き | 10 以下 = 停止、11〜255 を ch6 (速度) と ch106 (ON/OFF) に分離 | Adjust スライダー → EFX「MH Move」(円運動)、Speed Dial 20 秒〜2 秒 |
-| 7 | PAR と MH のストロボ（ソフト制御、同期） | 10 以下 = 停止、11〜255 を ch7 (速度) に。ch108 = PAR 点滅 ON、ch109 = MH 点滅 ON（MH が点灯中のみ）、ch110 = PAR Dimmer 保持（点滅中は 0） | Adjust スライダー → Chaser「Strobe PAR」「Strobe MH」(Dimmer の ON/OFF 2 ステップ)、共通の Speed Dial 0.5 秒〜0.05 秒/ステップ |
+| 7 | PAR と MH のストロボ（同期） | 10 以下 = なし。11〜255 で ch1〜3 と ch107 を同じタイマーで周期的に 0 にする。半周期 0.5 秒 → 0.05 秒 | なし（1〜3 と MH Dimmer のスライダーに乗る） |
 
 ### ブリッジの変換オプション
 
-サービスファイルの `ExecStart` で指定しています。値はすべて卓の生の値に対する変換です。
+サービスファイルの `ExecStart` で指定しています。値はすべて卓の生の値に対する変換です。適用順は logic → gate → deadzone → map → random → strobe です。
 
 | オプション | 意味 |
 |---|---|
 | `--deadzone CH:TH` | TH 以下を 0、TH+1〜255 を 1〜255 に引き伸ばす |
 | `--gate CH:TH:OUT` | CH が TH 以下なら OUT チャンネルに 0、超えたら 255 を出す（元の CH はそのまま） |
 | `--map CH:lo-hi=v/...` | 範囲ごとに固定値 `v`、または `a-b` で線形補間 |
-| `--quantize CH:v1/v2/...` | 0〜255 を等分し各ゾーンを列挙値に置換 |
 | `--logic OUT=式` | 式（`chN`、`> < <= >=`、`&` `\|` `!`）が真なら OUT チャンネルに 255、偽なら 0。生の値で判定 |
+| `--random CH:TH:T1-T2:O1/O2/O3` | CH が TH 超のとき O1〜O3 に 8 色パレットのランダム色。切替周期は TH+1 で T1 ms、255 で T2 ms |
+| `--strobe CH:TH:T1-T2:O1/O2/...` | CH が TH 超のとき O1〜 を周期的に 0 にする。半周期は TH+1 で T1 ms、255 で T2 ms |
 
 現在の指定:
 
 ```
---deadzone 4:10,6:10,7:10
---gate 4:10:104,6:10:106
+--deadzone 6:10
+--gate 6:10:106
 --map 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255
---logic "107=ch5>10&ch7<=10,108=ch7>10,109=ch7>10&ch5>10,110=ch7<=10"
+--logic 107=ch5>10
+--random 4:10:2000-80:1/2/3
+--strobe 7:10:500-50:1/2/3/107
 ```
 
 変更したら `systemctl --user daemon-reload && systemctl --user restart dmx2artnet` で反映されます。
@@ -142,14 +154,13 @@ QLC+ はアドレスが重なるフィクスチャを読み込み時に拒否す
 ### 設計上の注意
 
 - QLC+ の Flash ボタンは Scene にしか効きません（EFX や Chaser は起動しない）。
-  そのため ON/OFF は Adjust スライダー（Intensity 属性、0 で停止）で行い、
-  速度用の値とは別チャンネルに分けています。
-- PAR の Red/Green/Blue は HTP 合成なので、ランダム色を綺麗に出すときは 1〜3 を下げてください。
-- ストロボは灯体のハードウェアストロボではなく、QLC+ の Chaser で Dimmer を ON/OFF しています。
-  灯体ごとにタイミングがばらつくハードストロボと違い、PAR と MH が同じ周期で点滅します。
-  Dimmer は HTP なので、点滅中は「PAR Dimmer」「MH Dimmer」の保持スライダーをブリッジ側で 0 に落としています
-  （そのため HPAR は Dimmer を持つ 13ch モードが必須です）。Stinger は対象外です。
-- QLC+ の処理周期は 20 ms なので、ステップ 50 ms（10 Hz 点滅）あたりが実用上の上限です。
+  そのため EFX の ON/OFF は Adjust スライダー（Intensity 属性、0 で停止）で行い、
+  速度用の値とは別チャンネル（ch106）に分けています。
+- ランダム色とストロボはブリッジが生成するので、QLC+ 側に Chaser はありません。
+  点滅の最速は半周期 50 ms（10 Hz）です。ブリッジは 50 Hz で送信し、QLC+ の処理周期も 20 ms なので、
+  これより速くしても粗くなるだけです。
+- Stinger は Dimmer を持たないためストロボ同期の対象外です（必要なら `--strobe` の出力に
+  Stinger のチャンネルを足してください）。
 
 ## 運用コマンド
 

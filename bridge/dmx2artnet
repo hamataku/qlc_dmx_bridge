@@ -2,16 +2,24 @@
 """dmx2artnet - FTDI (Open DMX 系) で受けた DMX512 を Art-Net に変換して QLC+ へ渡すブリッジ
 
 - /dev/serial/by-id/<デバイス> を 250000 baud 8N2 で開き、BREAK 同期でフレームを復元する
-- 各フレームを ArtDMX パケットとして送る (既定: 127.0.0.1:6454, Art-Net universe 0 = QLC+ の Universe 1)
+- 50 Hz の内部タイマーで変換を適用し、ArtDMX パケットとして送る (既定: 127.0.0.1:6454, universe 0)
 - デバイスが無い / 抜かれた場合は 1 秒おきに再接続を待つ (常駐前提)
 
-使い方: dmx2artnet [--dev PATH] [--host 127.0.0.1] [--port 6454] [--universe 0] [-v]
+変換 (すべて卓の「生の値」で判定し、この順に適用):
+  --logic    OUT=式        条件が真なら OUT に 255、偽なら 0        例 107=ch5>10
+  --gate     CH:TH:OUT     CH が TH 以下なら OUT=0、超えたら 255     例 6:10:106
+  --deadzone CH:TH         TH 以下→0、TH+1..255→1..255 に引き伸ばし   例 6:10
+  --map      CH:lo-hi=v/.. 範囲ごとに固定値 v または a-b で線形補間   例 5:0-10=0/11-88=0/89-166=10
+  --random   CH:TH:T1-T2:O1/O2/O3   CH が TH 超のとき O1..O3 (RGB) にランダム色。切替周期は TH+1→T1 ms, 255→T2 ms
+  --strobe   CH:TH:T1-T2:O1/O2/..   CH が TH 超のとき O1.. を周期的に 0 にする。半周期は TH+1→T1 ms, 255→T2 ms
 """
-import os, sys, time, struct, fcntl, termios, select, socket, signal, argparse, errno
+import os, sys, time, struct, fcntl, termios, select, socket, signal, argparse, errno, random
 
 DEFAULT_DEV = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_BG01OIGN-if00-port0"
 TCGETS2, TCSETS2, BOTHER, CBAUD = 0x802C542A, 0x402C542B, 0o10000, 0o10017
 TERMIOS2 = "IIIIB19sII"
+TICK = 0.02  # 50 Hz
+PALETTE = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255), (255, 255, 255), (255, 80, 0)]
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--dev", default=DEFAULT_DEV)
@@ -19,65 +27,79 @@ ap.add_argument("--host", default="127.0.0.1")
 ap.add_argument("--port", type=int, default=6454)
 ap.add_argument("--universe", type=int, default=0, help="Art-Net universe (15bit: net/subnet/universe)")
 ap.add_argument("--keepalive", type=float, default=1.0, help="変化が無くても送る間隔 [秒]")
-ap.add_argument("--deadzone", default="", help="例 4:10,6:10 → ch4,ch6 は 10 以下を 0、11..255 を 1..255 に引き伸ばす")
-ap.add_argument("--gate", default="", help="例 4:10:104,6:10:106 → ch4 が 10 以下なら ch104=0、超えたら ch104=255")
-ap.add_argument("--quantize", default="", help="例 5:0,10,31,255 → ch5 を 0-255 で等分し、各ゾーンを列挙した値に置き換える")
-ap.add_argument("--map", default="", help="例 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255 (固定値) や 7:0-10=0/11-255=180-245 (線形補間)")
-ap.add_argument("--logic", default="", help="例 108=ch7>10,109=ch7>10&ch5>10 → 条件が真なら 255、偽なら 0 を OUT チャンネルへ (& | ! が使える、生の値で判定)")
+ap.add_argument("--deadzone", default="")
+ap.add_argument("--gate", default="")
+ap.add_argument("--map", default="")
+ap.add_argument("--logic", default="")
+ap.add_argument("--random", default="")
+ap.add_argument("--strobe", default="")
 ap.add_argument("-v", "--verbose", action="store_true")
 args = ap.parse_args()
 
+def split_items(spec):
+    return [x.strip() for x in spec.split(",") if x.strip()]
+
+def lin(v, th, t1, t2):
+    """v (th+1..255) を t1..t2 に線形補間"""
+    return t1 + (t2 - t1) * (v - th - 1) / max(1, 254 - th)
+
 DEAD = {}
-for item in [x for x in args.deadzone.split(",") if x.strip()]:
+for item in split_items(args.deadzone):
     ch, th = item.split(":"); DEAD[int(ch) - 1] = int(th)
-
 GATE = {}
-for item in [x for x in args.gate.split(",") if x.strip()]:
+for item in split_items(args.gate):
     ch, th, out = item.split(":"); GATE[int(ch) - 1] = (int(th), int(out) - 1)
-QUANT = {}
-for item in [x for x in args.quantize.split(",") if x.strip()]:
-    ch, vals = item.split(":", 1); QUANT[int(ch) - 1] = [int(v) for v in vals.split("/")]
-
 MAP = {}
-for item in [x for x in args.map.split(",") if x.strip()]:
+for item in split_items(args.map):
     ch, spec = item.split(":", 1); table = list(range(256))
     for part in spec.split("/"):
         rng, val = part.split("="); lo, hi = int(rng.split("-")[0]), int(rng.split("-")[1])
-        if "-" in val:   # 線形補間: lo->a, hi->b
+        if "-" in val:
             a, b = int(val.split("-")[0]), int(val.split("-")[1])
             for v in range(lo, hi + 1): table[v] = round(a + (b - a) * (v - lo) / max(1, hi - lo))
         else:
             for v in range(lo, hi + 1): table[v] = int(val)
     MAP[int(ch) - 1] = table
-
 LOGIC = []
-for item in [x for x in args.logic.split(",") if x.strip()]:
+for item in split_items(args.logic):
     out, expr = item.split("=", 1)
     expr = expr.replace("&", " and ").replace("|", " or ").replace("!", " not ")
     LOGIC.append((int(out) - 1, compile(expr, "<logic>", "eval")))
+RANDOM = []   # [ch, th, t1, t2, [outs], state]
+for item in split_items(args.random):
+    ch, th, rng, outs = item.split(":"); t1, t2 = rng.split("-")
+    RANDOM.append([int(ch) - 1, int(th), float(t1), float(t2), [int(o) - 1 for o in outs.split("/")], {"next": 0.0, "color": PALETTE[0]}])
+STROBE = []   # [ch, th, t1, t2, [outs]]
+for item in split_items(args.strobe):
+    ch, th, rng, outs = item.split(":"); t1, t2 = rng.split("-")
+    STROBE.append([int(ch) - 1, int(th), float(t1), float(t2), [int(o) - 1 for o in outs.split("/")]])
 
-def apply_deadzone(ch):
-    if not (DEAD or GATE or QUANT or MAP or LOGIC): return ch
-    b = bytearray(ch)
+def transform(raw, now):
+    b = bytearray(raw)
     if LOGIC:
-        env = {f"ch{i + 1}": b[i] for i in range(len(b))}
+        env = {f"ch{i + 1}": raw[i] for i in range(len(raw))}
         for out, code in LOGIC:
-            if out < len(b):
-                b[out] = 255 if eval(code, {"__builtins__": {}}, env) else 0
-    for idx, (th, out) in GATE.items():          # raw 値で判定してから他の変換をかける
-        if idx < len(b) and out < len(b):
-            b[out] = 0 if b[idx] <= th else 255
+            if out < len(b): b[out] = 255 if eval(code, {"__builtins__": {}}, env) else 0
+    for idx, (th, out) in GATE.items():
+        if idx < len(b) and out < len(b): b[out] = 0 if raw[idx] <= th else 255
     for idx, th in DEAD.items():
         if idx < len(b):
-            v = b[idx]
-            b[idx] = 0 if v <= th else max(1, round((v - th) * 255 / (255 - th)))
-    for idx, vals in QUANT.items():
-        if idx < len(b):
-            zone = min(len(vals) - 1, b[idx] * len(vals) // 256)
-            b[idx] = vals[zone]
+            v = raw[idx]; b[idx] = 0 if v <= th else max(1, round((v - th) * 255 / (255 - th)))
     for idx, table in MAP.items():
-        if idx < len(b):
-            b[idx] = table[b[idx]]
+        if idx < len(b): b[idx] = table[raw[idx]]
+    for ch, th, t1, t2, outs, st in RANDOM:
+        if raw[ch] > th:
+            if now >= st["next"]:
+                st["color"] = random.choice([c for c in PALETTE if c != st["color"]])
+                st["next"] = now + lin(raw[ch], th, t1, t2) / 1000.0
+            for o, v in zip(outs, st["color"]): b[o] = v
+        else:
+            st["next"] = 0.0
+    for ch, th, t1, t2, outs in STROBE:
+        if raw[ch] > th:
+            half = lin(raw[ch], th, t1, t2) / 1000.0
+            if int(now / half) % 2 == 1:
+                for o in outs: b[o] = 0
     return bytes(b)
 
 running = True
@@ -117,8 +139,11 @@ def send_artnet(channels):
         + bytes([seq, 0, args.universe & 0xFF, (args.universe >> 8) & 0x7F]) + struct.pack(">H", len(data)) + data
     sock.sendto(pkt, (args.host, args.port))
 
-log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} deadzone={DEAD} gate={GATE} quantize={QUANT} map={{k+1: 'set' for k in MAP}} logic={[o+1 for o,_ in LOGIC]}")
-last_sent = None; last_sent_t = 0.0; frames = 0
+log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} "
+    f"deadzone={ {k+1: v for k, v in DEAD.items()} } gate={ {k+1: (t, o+1) for k, (t, o) in GATE.items()} } "
+    f"map={[k+1 for k in MAP]} logic={[o+1 for o, _ in LOGIC]} random={[r[0]+1 for r in RANDOM]} strobe={[s[0]+1 for s in STROBE]}")
+raw = bytes(512)
+last_sent = None; last_sent_t = 0.0
 while running:
     if not os.path.exists(args.dev):
         time.sleep(1.0)
@@ -129,53 +154,57 @@ while running:
         log(f"open failed ({e}); retrying"); time.sleep(1.0); continue
     log("device opened, waiting for DMX")
     state = 0; cur = None; frames = 0; last_report = time.time(); receiving = False; lens = []
+    last_frame_t = 0.0; next_tick = time.monotonic()
     try:
         while running:
-            r, _, _ = select.select([fd], [], [], 0.5)
-            now = time.time()
+            timeout = max(0.0, next_tick - time.monotonic())
+            r, _, _ = select.select([fd], [], [], timeout)
             if r:
                 data = os.read(fd, 4096)
                 if not data:
                     raise OSError(errno.EIO, "EOF from device")
-                for b in data:
+                for byte in data:
                     if state == 0:
-                        if b == 0xFF: state = 1
-                        elif cur is not None: cur.append(b)
+                        if byte == 0xFF: state = 1
+                        elif cur is not None: cur.append(byte)
                     elif state == 1:
-                        if b == 0xFF:
+                        if byte == 0xFF:
                             if cur is not None: cur.append(0xFF)
                             state = 0
-                        elif b == 0x00: state = 2
+                        elif byte == 0x00: state = 2
                         else:
-                            if cur is not None: cur.append(b)
+                            if cur is not None: cur.append(byte)
                             state = 0
                     else:  # state 2: ff 00 xx
-                        if b == 0x00:  # BREAK -> frame boundary
+                        if byte == 0x00:  # BREAK -> frame boundary
                             if cur is not None and len(cur) >= 2 and cur[0] == 0x00:
                                 frames += 1
-                                # フレーム長の多数決: 欠落/連結で長さが狂ったフレームは捨てる
                                 lens.append(len(cur)); del lens[:-50]
                                 expected = max(set(lens), key=lens.count) if len(lens) >= 10 else len(cur)
-                                if len(cur) != expected:
-                                    cur = bytearray(); state = 0; continue
-                                ch = apply_deadzone(bytes(cur[1:513]).ljust(512, b"\x00"))
-                                if ch != last_sent or now - last_sent_t >= args.keepalive:
-                                    send_artnet(ch); last_sent = ch; last_sent_t = now
-                                if not receiving:
-                                    receiving = True; log(f"receiving DMX: {len(cur) - 1} channels/frame")
+                                if len(cur) == expected:
+                                    raw = bytes(cur[1:513]).ljust(512, b"\x00")
+                                    last_frame_t = time.time()
+                                    if not receiving:
+                                        receiving = True; log(f"receiving DMX: {len(cur) - 1} channels/frame")
                             cur = bytearray()
-                        # else: framing error byte -> dropped
                         state = 0
-            elif receiving and now - last_sent_t > 2.0:
-                receiving = False; log("DMX signal lost (no frames for 2s)")
-            if args.verbose and now - last_report >= 5.0:
-                nz = [(i + 1, v) for i, v in enumerate(last_sent or b"") if v][:10]
-                log(f"frames={frames} nonzero={nz}"); last_report = now
+            mono = time.monotonic()
+            if mono >= next_tick:
+                next_tick += TICK
+                if mono - next_tick > 1.0: next_tick = mono + TICK
+                now = time.time()
+                out = transform(raw, mono)
+                if out != last_sent or now - last_sent_t >= args.keepalive:
+                    send_artnet(out); last_sent = out; last_sent_t = now
+                if receiving and now - last_frame_t > 2.0:
+                    receiving = False; log("DMX signal lost (no frames for 2s)")
+                if args.verbose and now - last_report >= 5.0:
+                    nz = [(i + 1, v) for i, v in enumerate(out) if v][:12]
+                    log(f"frames={frames} out nonzero={nz}"); last_report = now
     except OSError as e:
         log(f"device error ({e}); will reconnect")
     finally:
         try: os.close(fd)
         except OSError: pass
-    last_sent = None
     time.sleep(1.0)
 log("dmx2artnet stopped")
