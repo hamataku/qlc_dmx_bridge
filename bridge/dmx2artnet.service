@@ -4,7 +4,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/dmx2artnet --deadzone 6:10 --gate 6:10:106 --map 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255,8:0-10=0/11-255=255 --logic 107=ch5>10 --colormod 4:10:20000-1500:1/2/3 --strobe 7:10:500-50:1/2/3/107
+ExecStart=%h/.local/bin/dmx2artnet --deadzone 6:10 --gate 6:10:106 --map 5:0-10=0/11-88=0/89-166=10/167-244=31/245-255=255 --logic 107=ch5>10 --colormod 4:10:20000-1500:1/2/3 --strobe 7:10:500-50:1/2/3/107 --randomset "8:10:4000-500:121=0;122=10-198;123=0/0/0/60-120;124=0/0/180;125=20-120;126=0;127=0;128=10-127*/128-255*;129=0"
 Restart=always
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1

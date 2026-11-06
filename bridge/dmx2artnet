@@ -14,6 +14,10 @@
   --strobe   CH:TH:T1-T2:O1/O2/..   CH が TH 超のとき O1.. を周期的に 0 にする。半周期は TH+1→T1 ms, 255→T2 ms
   --colormod CH:TH:T1-T2:O1/O2/O3   CH が TH 超のとき O1..O3 (RGB) の色を HSV で揺らす。明度は固定、
                                    色相の振れ幅 (最大 ±180°) と彩度の注入量と速度が CH に比例。周期は TH+1→T1 ms, 255→T2 ms
+  --randomset CH:TH:T1-T2:OUT=spec;OUT=spec;...
+                                   CH が TH 超のとき、周期 (TH+1→T1 ms, 255→T2 ms) ごとに各 OUT の値を spec から引き直す。
+                                   spec は / 区切りの候補からランダムに 1 つ選ぶ。候補: 固定値 v、範囲 a-b (一様乱数)、
+                                   a-b* (乱数ではなく CH の量に比例: TH+1→a, 255→b)。CH が TH 以下なら全 OUT を 0 にする
 """
 import os, sys, time, struct, fcntl, termios, select, socket, signal, argparse, errno, random, math, colorsys
 
@@ -36,6 +40,7 @@ ap.add_argument("--logic", default="")
 ap.add_argument("--random", default="")
 ap.add_argument("--strobe", default="")
 ap.add_argument("--colormod", default="")
+ap.add_argument("--randomset", default="")
 ap.add_argument("-v", "--verbose", action="store_true")
 args = ap.parse_args()
 
@@ -82,6 +87,23 @@ for item in split_items(args.colormod):
     ch, th, rng, outs = item.split(":"); t1, t2 = rng.split("-")
     COLORMOD.append([int(ch) - 1, int(th), float(t1), float(t2), [int(o) - 1 for o in outs.split("/")],
                      {"t": None, "p1": 0.0, "p2": 0.0, "p3": 0.0, "hbase": 0.0}])
+
+RANDOMSET = []  # [ch, th, t1, t2, [(out, [choice,...])], state]
+for item in split_items(args.randomset):
+    ch, th, rng, spec = item.split(":", 3); t1, t2 = rng.split("-")
+    outs = []
+    for part in [x for x in spec.split(";") if x.strip()]:
+        out, cands = part.split("=")
+        choices = []
+        for c in cands.split("/"):
+            if c.endswith("*"):
+                a, b = c[:-1].split("-"); choices.append(("scaled", int(a), int(b)))
+            elif "-" in c:
+                a, b = c.split("-"); choices.append(("uniform", int(a), int(b)))
+            else:
+                choices.append(("fixed", int(c), int(c)))
+        outs.append((int(out) - 1, choices))
+    RANDOMSET.append([int(ch) - 1, int(th), float(t1), float(t2), outs, {"next": 0.0, "picks": {}}])
 
 def colormod(rgb, a, st, now, period_s):
     """rgb: 0-255 の基準色, a: 0..1 の効果量, period_s: 揺れの基本周期 [秒]"""
@@ -131,6 +153,20 @@ def transform(raw, now):
             for o, v in zip(outs, colormod(base, a, st, now, lin(raw[ch], th, t1, t2) / 1000.0)): b[o] = v
         else:
             st["t"] = None
+    for ch, th, t1, t2, outs, st in RANDOMSET:
+        if raw[ch] > th:
+            a = (raw[ch] - th) / (255 - th)
+            if now >= st["next"]:
+                st["next"] = now + lin(raw[ch], th, t1, t2) / 1000.0
+                for out, choices in outs:
+                    kind, lo, hi = random.choice(choices)
+                    st["picks"][out] = (kind, lo, hi, random.randint(lo, hi) if kind == "uniform" else lo)
+            for out, _ in outs:
+                kind, lo, hi, val = st["picks"][out]
+                b[out] = round(lo + (hi - lo) * a) if kind == "scaled" else val
+        else:
+            st["next"] = 0.0
+            for out, _ in outs: b[out] = 0
     for ch, th, t1, t2, outs in STROBE:
         if raw[ch] > th:
             half = lin(raw[ch], th, t1, t2) / 1000.0
@@ -177,7 +213,7 @@ def send_artnet(channels):
 
 log(f"dmx2artnet start: dev={args.dev} -> {args.host}:{args.port} universe={args.universe} "
     f"deadzone={ {k+1: v for k, v in DEAD.items()} } gate={ {k+1: (t, o+1) for k, (t, o) in GATE.items()} } "
-    f"map={[k+1 for k in MAP]} logic={[o+1 for o, _ in LOGIC]} random={[r[0]+1 for r in RANDOM]} strobe={[s[0]+1 for s in STROBE]} colormod={[c[0]+1 for c in COLORMOD]}")
+    f"map={[k+1 for k in MAP]} logic={[o+1 for o, _ in LOGIC]} random={[r[0]+1 for r in RANDOM]} strobe={[s[0]+1 for s in STROBE]} colormod={[c[0]+1 for c in COLORMOD]} randomset={[r[0]+1 for r in RANDOMSET]}")
 raw = bytes(512)
 last_sent = None; last_sent_t = 0.0
 while running:

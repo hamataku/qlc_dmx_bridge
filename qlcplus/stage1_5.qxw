@@ -528,7 +528,7 @@
    <ShowEnableButton>True</ShowEnableButton>
    <Collapsed>False</Collapsed>
    <Frame Caption="DMX卓 1-7" ID="34">
-    <WindowState Visible="True" X="20" Y="20" Width="900" Height="236"/>
+    <WindowState Visible="True" X="20" Y="20" Width="1180" Height="236"/>
     <AllowResize>True</AllowResize>
     <ShowHeader>True</ShowHeader>
     <ShowEnableButton>True</ShowEnableButton>
@@ -611,15 +611,59 @@
       <Channel Fixture="4">7</Channel>
      </Level>
     </Slider>
-    <Slider Caption="8 Stinger Show" ID="48" WidgetStyle="Slider" InvertedAppearance="false">
-     <WindowState Visible="True" X="790" Y="30" Width="85" Height="190"/>
+    <Slider Caption="8 ST Color" ID="48" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="790" Y="30" Width="70" Height="190"/>
      <Appearance>
       <BackgroundColor>4282664004</BackgroundColor>
      </Appearance>
-     <Input ID="0" Universe="0" Channel="7"/>
+     <Input ID="0" Universe="0" Channel="121"/>
      <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
      <Level LowLimit="0" HighLimit="255" Value="0">
-      <Channel Fixture="0">0</Channel>
+      <Channel Fixture="0">1</Channel>
+     </Level>
+    </Slider>
+    <Slider Caption="8 ST Strobe" ID="49" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="865" Y="30" Width="70" Height="190"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Input ID="0" Universe="0" Channel="122"/>
+     <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0">
+      <Channel Fixture="0">2</Channel>
+     </Level>
+    </Slider>
+    <Slider Caption="8 ST UV" ID="50" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="940" Y="30" Width="70" Height="190"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Input ID="0" Universe="0" Channel="123"/>
+     <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0">
+      <Channel Fixture="0">3</Channel>
+     </Level>
+    </Slider>
+    <Slider Caption="8 ST UV spd" ID="51" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="1015" Y="30" Width="70" Height="190"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Input ID="0" Universe="0" Channel="124"/>
+     <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0">
+      <Channel Fixture="0">4</Channel>
+     </Level>
+    </Slider>
+    <Slider Caption="8 ST Rotate" ID="52" WidgetStyle="Slider" InvertedAppearance="false">
+     <WindowState Visible="True" X="1090" Y="30" Width="70" Height="190"/>
+     <Appearance>
+      <BackgroundColor>4282664004</BackgroundColor>
+     </Appearance>
+     <Input ID="0" Universe="0" Channel="127"/>
+     <SliderMode ValueDisplayStyle="Exact">Level</SliderMode>
+     <Level LowLimit="0" HighLimit="255" Value="0">
+      <Channel Fixture="0">7</Channel>
      </Level>
     </Slider>
    </Frame>
